@@ -2,12 +2,40 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
+from urllib.request import urlopen
 
 import pandas as pd
-import requests
 
 WHO_BASE_URL = "https://ghoapi.azureedge.net/api"
+WHO_RAW_COLUMNS = [
+    "Id",
+    "IndicatorCode",
+    "SpatialDimType",
+    "SpatialDim",
+    "ParentLocationCode",
+    "ParentLocation",
+    "TimeDimType",
+    "TimeDim",
+    "Dim1Type",
+    "Dim1",
+    "Dim2Type",
+    "Dim2",
+    "Dim3Type",
+    "Dim3",
+    "DataSourceDimType",
+    "DataSourceDim",
+    "Value",
+    "NumericValue",
+    "Low",
+    "High",
+    "Comments",
+    "Date",
+    "TimeDimensionValue",
+    "TimeDimensionBegin",
+    "TimeDimensionEnd",
+]
 
 
 def extract_who_indicator(
@@ -16,10 +44,9 @@ def extract_who_indicator(
     timeout_seconds: int = 30,
 ) -> pd.DataFrame:
     url = f"{WHO_BASE_URL}/{indicator_code}"
-    response = requests.get(url, timeout=timeout_seconds)
-    response.raise_for_status()
+    with urlopen(url, timeout=timeout_seconds) as response:
+        payload: dict[str, Any] = json.load(response)
 
-    payload: dict[str, Any] = response.json()
     records = payload.get("value", [])
     if not records:
         return _empty_dataframe()
@@ -28,16 +55,18 @@ def extract_who_indicator(
     if raw_df.empty:
         return _empty_dataframe()
 
-    normalized = pd.DataFrame(
-        {
-            "country_code": raw_df.get("SpatialDim"),
-            "year": pd.to_numeric(raw_df.get("TimeDim"), errors="coerce"),
-            "indicator_code": indicator_code,
-            "indicator_name": indicator_name,
-            "source": "who",
-            "value": pd.to_numeric(raw_df.get("NumericValue"), errors="coerce"),
-        }
-    )
+    # Conservamos las dimensiones originales de WHO para explicar duplicados.
+    for column in WHO_RAW_COLUMNS:
+        if column not in raw_df.columns:
+            raw_df[column] = pd.NA
+
+    normalized = raw_df[WHO_RAW_COLUMNS].copy()
+    normalized.insert(0, "country_code", raw_df.get("SpatialDim"))
+    normalized.insert(1, "year", pd.to_numeric(raw_df.get("TimeDim"), errors="coerce"))
+    normalized.insert(2, "indicator_code", indicator_code)
+    normalized.insert(3, "indicator_name", indicator_name)
+    normalized.insert(4, "source", "who")
+    normalized.insert(5, "value", pd.to_numeric(raw_df.get("NumericValue"), errors="coerce"))
 
     normalized["country_code"] = normalized["country_code"].astype(str).str.upper()
     normalized = normalized[
@@ -59,5 +88,6 @@ def _empty_dataframe() -> pd.DataFrame:
             "indicator_name",
             "source",
             "value",
+            *WHO_RAW_COLUMNS,
         ]
     )

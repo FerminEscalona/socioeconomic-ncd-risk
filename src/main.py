@@ -6,7 +6,6 @@ import sys
 from pathlib import Path
 
 import pandas as pd
-from dotenv import load_dotenv
 
 # Permite ejecutar "python src/main.py" sin ajustar PYTHONPATH manualmente.
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -23,7 +22,8 @@ WHO_OUTPUT_DIR = ROOT_DIR / "data" / "raw" / "who"
 WORLD_BANK_OUTPUT_DIR = ROOT_DIR / "data" / "raw" / "world_bank"
 
 
-def _run_who_pipeline(logger) -> None:
+def _run_who_pipeline(logger) -> int:
+    failures = 0
     for indicator_code, metadata in WHO_INDICATORS.items():
         indicator_name = metadata["indicator_name"]
         logger.info("WHO | Iniciando extraccion de %s", indicator_code)
@@ -39,10 +39,13 @@ def _run_who_pipeline(logger) -> None:
                 len(df),
             )
         except Exception as exc:  # noqa: BLE001
+            failures += 1
             logger.exception("WHO | Error %s | %s", indicator_code, exc)
+    return failures
 
 
-def _run_world_bank_pipeline(logger) -> None:
+def _run_world_bank_pipeline(logger) -> int:
+    failures = 0
     for indicator_code, metadata in WORLD_BANK_INDICATORS.items():
         indicator_name = metadata["indicator_name"]
         logger.info("WORLD_BANK | Iniciando extraccion de %s", indicator_code)
@@ -58,7 +61,9 @@ def _run_world_bank_pipeline(logger) -> None:
                 len(df),
             )
         except Exception as exc:  # noqa: BLE001
+            failures += 1
             logger.exception("WORLD_BANK | Error %s | %s", indicator_code, exc)
+    return failures
 
 
 def _persist_indicator_df(
@@ -71,12 +76,24 @@ def _persist_indicator_df(
 
 
 def main() -> None:
-    load_dotenv()
+    _load_dotenv_if_available()
     logger = get_logger()
     logger.info("Inicio de pipeline de extraccion")
-    _run_who_pipeline(logger)
-    _run_world_bank_pipeline(logger)
+    failures = _run_who_pipeline(logger)
+    failures += _run_world_bank_pipeline(logger)
+    if failures:
+        raise RuntimeError(f"Pipeline de extraccion termino con {failures} errores")
     logger.info("Fin de pipeline de extraccion")
+
+
+def _load_dotenv_if_available() -> None:
+    """Carga variables locales si python-dotenv esta instalado."""
+    try:
+        from dotenv import load_dotenv
+    except ModuleNotFoundError:
+        return
+
+    load_dotenv()
 
 
 if __name__ == "__main__":

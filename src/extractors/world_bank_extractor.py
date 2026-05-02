@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
+from urllib.request import urlopen
 
 import pandas as pd
-import requests
 
 WORLD_BANK_BASE_URL = "https://api.worldbank.org/v2"
 
@@ -19,10 +20,9 @@ def extract_world_bank_indicator(
         f"{WORLD_BANK_BASE_URL}/country/all/indicator/{indicator_code}"
         "?format=json&per_page=20000"
     )
-    response = requests.get(url, timeout=timeout_seconds)
-    response.raise_for_status()
+    with urlopen(url, timeout=timeout_seconds) as response:
+        payload: list[Any] = json.load(response)
 
-    payload: list[Any] = response.json()
     if not isinstance(payload, list) or len(payload) < 2:
         return _empty_dataframe()
 
