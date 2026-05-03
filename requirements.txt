@@ -2,3 +2,5 @@ requests
 pandas
 polars
 python-dotenv
+matplotlib
+seaborn

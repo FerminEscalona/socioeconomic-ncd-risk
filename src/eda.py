@@ -11,11 +11,14 @@ El script:
 from __future__ import annotations
 
 import argparse
-import html
 import logging
-import math
+import os
 from pathlib import Path
 
+os.environ.setdefault("MPLCONFIGDIR", "/private/tmp/matplotlib")
+import matplotlib
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -31,6 +34,36 @@ EXPECTED_COLUMNS = [
 ]
 PRIMARY_KEY = ["country_code", "year"]
 RAW_SOURCE_FOLDERS = {"who", "world_bank"}
+TARGET_COLUMN = "NCDMORT3070"
+DROP_COLUMNS_FOR_MODEL = ["WHOSIS_000001"]
+LOG1P_TRANSFORM_COLUMNS = ["NY.GDP.PCAP.CD", "TB_e_inc_num"]
+ISO3_COUNTRY_CODES = {
+    "ABW", "AFG", "AGO", "AIA", "ALA", "ALB", "AND", "ARE", "ARG", "ARM",
+    "ASM", "ATA", "ATF", "ATG", "AUS", "AUT", "AZE", "BDI", "BEL", "BEN",
+    "BES", "BFA", "BGD", "BGR", "BHR", "BHS", "BIH", "BLM", "BLR", "BLZ",
+    "BMU", "BOL", "BRA", "BRB", "BRN", "BTN", "BVT", "BWA", "CAF", "CAN",
+    "CCK", "CHE", "CHL", "CHN", "CIV", "CMR", "COD", "COG", "COK", "COL",
+    "COM", "CPV", "CRI", "CUB", "CUW", "CXR", "CYM", "CYP", "CZE", "DEU",
+    "DJI", "DMA", "DNK", "DOM", "DZA", "ECU", "EGY", "ERI", "ESH", "ESP",
+    "EST", "ETH", "FIN", "FJI", "FLK", "FRA", "FRO", "FSM", "GAB", "GBR",
+    "GEO", "GGY", "GHA", "GIB", "GIN", "GLP", "GMB", "GNB", "GNQ", "GRC",
+    "GRD", "GRL", "GTM", "GUF", "GUM", "GUY", "HKG", "HMD", "HND", "HRV",
+    "HTI", "HUN", "IDN", "IMN", "IND", "IOT", "IRL", "IRN", "IRQ", "ISL",
+    "ISR", "ITA", "JAM", "JEY", "JOR", "JPN", "KAZ", "KEN", "KGZ", "KHM",
+    "KIR", "KNA", "KOR", "KWT", "LAO", "LBN", "LBR", "LBY", "LCA", "LIE",
+    "LKA", "LSO", "LTU", "LUX", "LVA", "MAC", "MAF", "MAR", "MCO", "MDA",
+    "MDG", "MDV", "MEX", "MHL", "MKD", "MLI", "MLT", "MMR", "MNE", "MNG",
+    "MNP", "MOZ", "MRT", "MSR", "MTQ", "MUS", "MWI", "MYS", "MYT", "NAM",
+    "NCL", "NER", "NFK", "NGA", "NIC", "NIU", "NLD", "NOR", "NPL", "NRU",
+    "NZL", "OMN", "PAK", "PAN", "PCN", "PER", "PHL", "PLW", "PNG", "POL",
+    "PRI", "PRK", "PRT", "PRY", "PSE", "PYF", "QAT", "REU", "ROU", "RUS",
+    "RWA", "SAU", "SDN", "SEN", "SGP", "SGS", "SHN", "SJM", "SLB", "SLE",
+    "SLV", "SMR", "SOM", "SPM", "SRB", "SSD", "STP", "SUR", "SVK", "SVN",
+    "SWE", "SWZ", "SXM", "SYC", "SYR", "TCA", "TCD", "TGO", "THA", "TJK",
+    "TKL", "TKM", "TLS", "TON", "TTO", "TUN", "TUR", "TUV", "TWN", "TZA",
+    "UGA", "UKR", "UMI", "URY", "USA", "UZB", "VAT", "VCT", "VEN", "VGB",
+    "VIR", "VNM", "VUT", "WLF", "WSM", "YEM", "ZAF", "ZMB", "ZWE",
+}
 
 
 def configure_logger() -> logging.Logger:
@@ -75,8 +108,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--end-year",
         type=int,
-        default=2025,
+        default=2024,
         help="Ultimo ano incluido en el panel unificado.",
+    )
+    parser.add_argument(
+        "--include-aggregates",
+        action="store_true",
+        help="Incluye agregados regionales o economicos ademas de paises ISO3.",
     )
     return parser.parse_args()
 
@@ -136,6 +174,64 @@ def filter_year_range(
     ].copy()
     filtered["year"] = filtered["year"].astype(int)
     return filtered
+
+
+def filter_iso3_countries(long_df: pd.DataFrame) -> pd.DataFrame:
+    """Conserva solo codigos ISO3 de paises y territorios."""
+    return long_df.loc[long_df["country_code"].isin(ISO3_COUNTRY_CODES)].copy()
+
+
+def build_country_filter_summary(
+    before_df: pd.DataFrame,
+    after_df: pd.DataFrame,
+) -> pd.DataFrame:
+    """Compara cobertura antes y despues de excluir agregados no ISO3."""
+    before_rows = len(before_df)
+    after_rows = len(after_df)
+    before_countries = before_df["country_code"].nunique(dropna=True)
+    after_countries = after_df["country_code"].nunique(dropna=True)
+    removed_country_codes = sorted(
+        set(before_df["country_code"].dropna()) - set(after_df["country_code"].dropna())
+    )
+
+    return pd.DataFrame(
+        [
+            {
+                "metric": "rows_before_iso3_filter",
+                "value": before_rows,
+            },
+            {
+                "metric": "rows_after_iso3_filter",
+                "value": after_rows,
+            },
+            {
+                "metric": "rows_removed",
+                "value": before_rows - after_rows,
+            },
+            {
+                "metric": "rows_removed_percentage",
+                "value": round((before_rows - after_rows) / before_rows * 100, 2)
+                if before_rows
+                else 0,
+            },
+            {
+                "metric": "country_codes_before_iso3_filter",
+                "value": before_countries,
+            },
+            {
+                "metric": "country_codes_after_iso3_filter",
+                "value": after_countries,
+            },
+            {
+                "metric": "country_codes_removed",
+                "value": before_countries - after_countries,
+            },
+            {
+                "metric": "removed_country_codes",
+                "value": " | ".join(removed_country_codes),
+            },
+        ]
+    )
 
 
 def load_and_unify_datasets(csv_files: list[Path]) -> tuple[pd.DataFrame, pd.DataFrame]:
@@ -437,6 +533,70 @@ def build_wide_dataset(long_df: pd.DataFrame) -> pd.DataFrame:
     return wide_df.sort_values(PRIMARY_KEY).reset_index(drop=True)
 
 
+def prepare_model_wide_dataset(wide_df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Aplica reglas simples de preparacion para el panel modelable."""
+    prepared_df = wide_df.drop(columns=DROP_COLUMNS_FOR_MODEL, errors="ignore").copy()
+    predictor_columns = [
+        column
+        for column in prepared_df.columns
+        if column not in PRIMARY_KEY and column != TARGET_COLUMN
+    ]
+    before_missing = prepared_df[predictor_columns].isna().sum().sum()
+
+    # Interpolamos dentro de cada pais para respetar la evolucion temporal nacional.
+    prepared_df = prepared_df.sort_values(PRIMARY_KEY).reset_index(drop=True)
+    prepared_df[predictor_columns] = prepared_df.groupby("country_code")[
+        predictor_columns
+    ].transform(lambda group: group.interpolate(method="linear", limit_area="inside"))
+
+    # Los huecos restantes se cubren con la mediana anual del indicador.
+    for column in predictor_columns:
+        prepared_df[column] = prepared_df[column].fillna(
+            prepared_df.groupby("year")[column].transform("median")
+        )
+    after_year_median_missing = prepared_df[predictor_columns].isna().sum().sum()
+
+    # Si un ano completo no tiene datos, no existe mediana anual; usamos mediana global.
+    for column in predictor_columns:
+        prepared_df[column] = prepared_df[column].fillna(prepared_df[column].median())
+
+    for column in LOG1P_TRANSFORM_COLUMNS:
+        if column in prepared_df.columns:
+            prepared_df[f"{column}_log1p"] = np.log1p(prepared_df[column])
+            prepared_df = prepared_df.drop(columns=[column])
+
+    after_columns = [
+        column
+        for column in prepared_df.columns
+        if column not in PRIMARY_KEY and column != TARGET_COLUMN
+    ]
+    after_missing = prepared_df[after_columns].isna().sum().sum()
+    target_missing = (
+        int(prepared_df[TARGET_COLUMN].isna().sum())
+        if TARGET_COLUMN in prepared_df.columns
+        else 0
+    )
+    summary = pd.DataFrame(
+        [
+            {"metric": "year_max_after_filter", "value": int(prepared_df["year"].max())},
+            {"metric": "dropped_columns", "value": " | ".join(DROP_COLUMNS_FOR_MODEL)},
+            {"metric": "target_not_imputed", "value": TARGET_COLUMN},
+            {"metric": "predictor_missing_before_imputation", "value": int(before_missing)},
+            {
+                "metric": "predictor_missing_after_year_median",
+                "value": int(after_year_median_missing),
+            },
+            {"metric": "predictor_missing_after_final_fallback", "value": int(after_missing)},
+            {"metric": "target_missing_after_preparation", "value": target_missing},
+            {
+                "metric": "log1p_transformed_columns",
+                "value": " | ".join(LOG1P_TRANSFORM_COLUMNS),
+            },
+        ]
+    )
+    return prepared_df, summary
+
+
 def build_missing_by_variable_wide(wide_df: pd.DataFrame) -> pd.DataFrame:
     """Mide faltantes por variable tras el merge para ver la perdida de cobertura."""
     indicator_columns = [column for column in wide_df.columns if column not in PRIMARY_KEY]
@@ -671,6 +831,8 @@ def build_report(
     missing_by_variable_wide: pd.DataFrame,
     outliers_summary: pd.DataFrame,
     correlation_df: pd.DataFrame,
+    country_filter_summary: pd.DataFrame,
+    model_preparation_summary: pd.DataFrame,
 ) -> str:
     """Construye un resumen corto para leer hallazgos clave sin abrir todos los CSV."""
     top_missing = missing_by_variable_wide.head(3)
@@ -694,6 +856,24 @@ def build_report(
         "## Cobertura general",
     ]
     for _, row in general_summary.iterrows():
+        lines.append(f"- {row['metric']}: {row['value']}")
+
+    lines.extend(
+        [
+            "",
+            "## Impacto del filtro ISO3",
+        ]
+    )
+    for _, row in country_filter_summary.iterrows():
+        lines.append(f"- {row['metric']}: {row['value']}")
+
+    lines.extend(
+        [
+            "",
+            "## Preparacion para modelo",
+        ]
+    )
+    for _, row in model_preparation_summary.iterrows():
         lines.append(f"- {row['metric']}: {row['value']}")
 
     lines.extend(
@@ -753,10 +933,17 @@ def main() -> None:
     logger.info("Cargando y unificando %s archivos", len(csv_files))
     long_df, file_summary = load_and_unify_datasets(csv_files)
     long_df = filter_year_range(long_df, args.start_year, args.end_year)
+    country_filter_summary = build_country_filter_summary(
+        before_df=long_df,
+        after_df=filter_iso3_countries(long_df),
+    )
+    if not args.include_aggregates:
+        long_df = filter_iso3_countries(long_df)
 
     logger.info("Construyendo dataset wide por country_code y year")
     canonical_long_df = build_canonical_long_dataset(long_df)
-    wide_df = build_wide_dataset(canonical_long_df)
+    raw_wide_df = build_wide_dataset(canonical_long_df)
+    wide_df, model_preparation_summary = prepare_model_wide_dataset(raw_wide_df)
     indicator_metadata = build_indicator_metadata(long_df)
 
     logger.info("Calculando tablas de EDA")
@@ -774,10 +961,32 @@ def main() -> None:
     outliers_summary, outlier_rows = build_outlier_tables(wide_df)
     correlation_df = compute_correlation_matrix(wide_df)
 
-    logger.info("Guardando datasets principales (se omite guardar tablas CSV auxiliares por simplicidad)")
+    logger.info("Guardando datasets principales y tablas de EDA")
     save_dataframe(long_df, output_dir / "unified_long.csv")
     save_dataframe(canonical_long_df, output_dir / "unified_long_canonical.csv")
+    save_dataframe(raw_wide_df, output_dir / "unified_wide_before_imputation.csv")
     save_dataframe(wide_df, output_dir / "unified_wide.csv")
+    save_dataframe(country_filter_summary, output_dir / "country_filter_summary.csv")
+    save_dataframe(model_preparation_summary, output_dir / "model_preparation_summary.csv")
+    save_dataframe(file_summary, tables_dir / "file_summary.csv")
+    save_dataframe(indicator_metadata, tables_dir / "indicator_metadata.csv")
+    save_dataframe(general_summary, tables_dir / "general_summary.csv")
+    save_dataframe(value_statistics, tables_dir / "value_statistics_by_indicator.csv")
+    save_dataframe(nulls_by_indicator, tables_dir / "nulls_by_indicator_long.csv")
+    save_dataframe(coverage_by_country, tables_dir / "coverage_by_country.csv")
+    save_dataframe(coverage_by_year, tables_dir / "coverage_by_year.csv")
+    save_dataframe(coverage_by_indicator, tables_dir / "coverage_by_indicator.csv")
+    save_dataframe(duplicate_key_summary, tables_dir / "duplicate_key_summary.csv")
+    save_dataframe(duplicate_dimension_summary, tables_dir / "duplicate_dimension_summary.csv")
+    save_dataframe(missing_by_variable_wide, tables_dir / "missing_by_variable_wide.csv")
+    save_dataframe(row_missingness_summary, tables_dir / "row_missingness_summary.csv")
+    save_dataframe(
+        missingness_by_year_indicator.reset_index(),
+        tables_dir / "missingness_by_year_indicator.csv",
+    )
+    save_dataframe(outliers_summary, tables_dir / "outliers_summary.csv")
+    save_dataframe(outlier_rows, tables_dir / "outlier_rows.csv")
+    save_dataframe(correlation_df.reset_index(), tables_dir / "correlation_matrix.csv")
 
     logger.info("Generando graficos")
     plot_distributions(
@@ -788,11 +997,11 @@ def main() -> None:
     )
     plot_correlation_heatmap(
         correlation_df=correlation_df,
-        output_path=plots_dir / "correlation_heatmap.svg",
+        output_path=plots_dir / "correlation_heatmap.png",
     )
     plot_missingness_heatmap(
         missingness_df=missingness_by_year_indicator,
-        output_path=plots_dir / "missingness_heatmap_by_year_indicator.svg",
+        output_path=plots_dir / "missingness_heatmap_by_year_indicator.png",
     )
 
     logger.info("Imprimiendo reporte resumido")
@@ -801,7 +1010,10 @@ def main() -> None:
         missing_by_variable_wide=missing_by_variable_wide,
         outliers_summary=outliers_summary,
         correlation_df=correlation_df,
+        country_filter_summary=country_filter_summary,
+        model_preparation_summary=model_preparation_summary,
     )
+    write_text(report, output_dir / "eda_report.md")
     print("\n" + "="*50)
     print(report)
     print("="*50 + "\n")
