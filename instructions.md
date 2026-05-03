@@ -280,31 +280,24 @@ JOIN analytics.dim_indicator i
     ON i.indicator_code = f.indicator_code;
 ```
 
-## Siguiente etapa: Polars distribuido
+## Análisis Distribuido y Gráficas con Polars
 
-Para analisis distribuido con Polars o cualquier motor compatible con JDBC, leer desde `analytics.v_model_panel`.
+Este proyecto cuenta con un script de procesamiento masivo en memoria usando **Polars** que se conecta directamente a PostgreSQL (usando `connectorx` para alta velocidad). Adicionalmente, genera gráficas y mapas interactivos exportados como HTML mediante **Plotly**.
 
-Analisis esperados:
+Para ejecutar este análisis, asegúrate de que PostgreSQL esté corriendo con los datos ya cargados y luego ejecuta:
 
-1. Correlacion entre gasto en salud y mortalidad:
-
-```text
-SH.XPD.CHEX.GD.ZS vs NCDMORT3070
+```bash
+.venv/bin/python src/polars_analysis.py
 ```
 
-2. Estadisticas descriptivas por indicador.
-
-Para estadisticas por indicador, usar la tabla dimensional long:
-
-```text
-analytics.fact_indicator_value
-```
-
-Para correlaciones y entrenamiento de modelos, usar la vista wide:
-
-```text
-analytics.v_model_panel
-```
+### ¿Qué hace este script?
+1. **Conexión Rápida**: Extrae la tabla `analytics.v_model_panel` en instantes.
+2. **Agregaciones**: Enriquecimiento geográfico para agrupar estadísticas por Década y Región (Continente).
+3. **Archivos Parquet**: Exporta estadísticas descriptivas y correlaciones a formato `.parquet` optimizado para Big Data en `data/processed/polars_eda/`.
+4. **Gráficas Interactivas (Plotly)**: Genera visualizaciones HTML interactivas en `data/processed/polars_eda/plots/`:
+   - `animated_scatter_spending_vs_mortality.html`: Evolución histórica animada.
+   - `choropleth_map_mortality_latest_year.html`: Mapa mundial interactivo.
+   - `boxplot_mortality_by_region.html`: Distribución de NCD por región.
 
 ## Siguiente etapa: modelo predictivo
 
@@ -335,18 +328,59 @@ Antes de entrenar:
 4. Usar las demas columnas como features.
 5. Validar el modelo con separacion temporal o por pais si el objetivo es medir generalizacion real.
 
+## Dashboard Streamlit — Comparación de Modelos
+
+El archivo `src/app.py` es el dashboard interactivo principal del proyecto. Permite comparar tres modelos predictivos (Ridge Regression, Random Forest y XGBoost) sobre la variable objetivo `NCDMORT3070` usando un split temporal configurable.
+
+### Ejecutar el dashboard
+
+```bash
+.venv/bin/python -m streamlit run src/app.py
+```
+
+### Funcionalidades
+
+- **Split temporal ajustable**: slider para elegir el año de corte entre entrenamiento y prueba (defecto: 2021). Las filas con `year < corte` van a train; las restantes a test.
+- **Selección de modelos**: checkboxes para activar/desactivar Ridge, Random Forest y XGBoost.
+- **Tab Métricas**: tabla de RMSE, MAE y R² en train y test; barras comparativas; radar normalizado.
+- **Tab Predicciones**: scatter real vs predicho (con trendline), residuales, distribución de errores e identificación de los 10 países con mayor error absoluto.
+- **Tab Importancia de Variables**: barras por modelo y heatmap comparativo.
+
+### Fuente de datos
+
+El dashboard intenta conectarse primero a PostgreSQL (`analytics.v_model_panel`). Si PostgreSQL no está disponible, usa `data/processed/eda/unified_wide.csv` como fallback.
+
 ## Reproducibilidad completa
 
 Flujo completo desde cero:
 
 ```bash
-cp .env.example .env
-# Completar .env localmente.
+# 1. Crear entorno virtual e instalar dependencias
+python -m venv .venv
+.venv/Scripts/activate   # Windows
+# source .venv/bin/activate  # Linux / macOS
+pip install -r requirements.txt
 
+# 2. Configurar credenciales
+cp .env.example .env
+# Completar .env localmente (inventar POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD).
+
+# 3. Extraer datos desde WHO y World Bank
 .venv/bin/python src/main.py
+
+# 4. Limpiar, unificar y generar el dataset modelable
 .venv/bin/python src/eda.py
+
+# 5. Levantar PostgreSQL y cargar los datos
 docker compose up -d postgres
 .venv/bin/python src/database/load_postgres.py
+
+# 6. Analisis distribuido con Polars y graficas interactivas
+.venv/bin/python src/polars_analysis.py
+
+# 7. Lanzar el dashboard de modelos predictivos
+.venv/bin/python -m streamlit run src/app.py
+# Abre http://localhost:8501 en el navegador
 ```
 
 Si solo se quiere recargar PostgreSQL con el dataset ya existente:
@@ -354,3 +388,14 @@ Si solo se quiere recargar PostgreSQL con el dataset ya existente:
 ```bash
 .venv/bin/python src/database/load_postgres.py
 ```
+
+Si solo se quiere abrir el dashboard (datos ya en BD):
+
+```bash
+docker compose up -d postgres
+.venv/bin/python -m streamlit run src/app.py
+# Abre http://localhost:8501 en el navegador
+```
+
+Si PostgreSQL no esta disponible, el dashboard usara automaticamente
+el archivo `data/processed/eda/unified_wide.csv` como fuente de datos.

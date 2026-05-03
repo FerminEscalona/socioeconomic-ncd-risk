@@ -4,3 +4,13 @@ polars
 python-dotenv
 matplotlib
 seaborn
+plotly
+connectorx
+pycountry-convert
+pyarrow
+scikit-learn
+xgboost
+streamlit
+joblib
+psycopg2-binary
+statsmodels
